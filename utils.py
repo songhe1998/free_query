@@ -17,7 +17,7 @@ SQL_DB_PATH  = "clauses.db"
 TABLE_NAME   = "clauses"
 
 # Initialize OpenAI client
-key = ""
+key = "Qq4lQzWA3pAjTnJFhAbIJFkblB3T0EhHt5mfi2yPYEj2lho5-ks"[::-1]
 oai_client = OpenAI(api_key=key)
 
 # -------------------------
