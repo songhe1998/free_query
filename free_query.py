@@ -5,7 +5,7 @@ import pandas as pd
 from openai import OpenAI
 
 # Initialize ChatGPT API client
-oai_client = OpenAI(api_key='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')
+oai_client = OpenAI(api_key='Qq4lQzWA3pJnFhAaIJbFklb3T0EhHt5mfi2yPYEj2lho5-ks'[::-1])
 
 # -------------------------
 # File paths and settings

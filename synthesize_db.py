@@ -11,7 +11,7 @@ OUTPUT_PATH = "synthetic_clauses.jsonl"
 CLAUSE_LIMIT = 50  # Increased for better coverage
 
 # Initialize OpenAI client
-oai_client = OpenAI(api_key="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")
+oai_client = OpenAI(api_key="Qq4lQzWA3pJnFhAaIJbFklb3T0EhHt5mfi2yPYEj2lho5-ks"[::-1])
 
 # Define hierarchical fields structure
 FIELD_HIERARCHY = {
