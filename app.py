@@ -25,14 +25,26 @@ def check_openai_setup():
     except Exception as e:
         return False, f"Error checking secrets: {e}"
 
+def test_openai_connection():
+    """Test if OpenAI can be imported and initialized"""
+    try:
+        # Try to import and test the query processor
+        from query_processor import check_openai_client
+        if check_openai_client():
+            return True, "OpenAI client successfully initialized"
+        else:
+            return False, "OpenAI client initialization failed"
+    except Exception as e:
+        return False, f"Error initializing OpenAI: {str(e)}"
+
 # Main app logic
 def main():
     # Check OpenAI setup
-    openai_available, openai_status = check_openai_setup()
+    openai_configured, config_status = check_openai_setup()
     
-    if not openai_available:
+    if not openai_configured:
         st.error("🔧 Setup Required")
-        st.warning(openai_status)
+        st.warning(config_status)
         
         with st.expander("📋 Setup Instructions", expanded=True):
             st.markdown("""
@@ -52,55 +64,100 @@ def main():
             - Go to [OpenAI Platform](https://platform.openai.com/account/api-keys)
             - Create a new API key
             - Copy and paste it into the Streamlit secrets
+            
+            **Note:** Make sure your OpenAI account has sufficient credits.
             """)
         
         st.info("Once configured, this app will allow you to analyze legal documents using natural language queries!")
         return
     
-    # If OpenAI is configured, show the main app
-    st.success("✅ OpenAI API key configured successfully!")
+    # If OpenAI key is configured, test the connection
+    st.success("✅ OpenAI API key configured!")
     
-    # Import query processor only when OpenAI is available
+    # Test OpenAI connection
+    with st.spinner("Testing OpenAI connection..."):
+        openai_works, openai_status = test_openai_connection()
+    
+    if not openai_works:
+        st.error("❌ OpenAI Connection Failed")
+        st.warning(openai_status)
+        
+        with st.expander("🔧 Troubleshooting", expanded=True):
+            st.markdown("""
+            **Common issues and solutions:**
+            
+            1. **Invalid API Key**: Check that your API key is correct and hasn't expired
+            2. **No Credits**: Ensure your OpenAI account has sufficient credits
+            3. **API Key Format**: Make sure the key starts with 'sk-' and is complete
+            4. **Compatibility Issue**: The app might need to restart after configuration
+            
+            **Try these steps:**
+            1. Double-check your API key in Streamlit secrets
+            2. Verify your OpenAI account has credits
+            3. Try restarting the app (modify and save any file to trigger restart)
+            """)
+        return
+    
+    # If everything works, show the main app
+    st.success("✅ OpenAI connection successful!")
+    
+    # Import query processor only when everything is working
     try:
         from query_processor import process_query
         
         st.markdown("### 🔍 Query Legal Documents")
+        st.markdown("Ask questions about legal documents in natural language!")
+        
+        # Example queries
+        with st.expander("💡 Example Queries"):
+            st.markdown("""
+            - "Show me clauses with amounts greater than $1000"
+            - "Find clauses mentioning Microsoft"
+            - "What are the termination clauses?"
+            - "Show clauses with effective dates in 2023"
+            """)
         
         # Query input
         user_query = st.text_input(
-            "Enter your query about legal documents:",
+            "Enter your query:",
             placeholder="e.g., Show me clauses with amounts greater than $1000"
         )
         
-        if st.button("🚀 Process Query", type="primary"):
-            if user_query:
-                with st.spinner("Processing your query..."):
-                    try:
-                        results = process_query(user_query)
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            process_button = st.button("🚀 Process Query", type="primary")
+        
+        if process_button and user_query:
+            with st.spinner("Processing your query..."):
+                try:
+                    results = process_query(user_query)
+                    
+                    if results:
+                        st.success(f"Found {len(results)} results!")
                         
-                        if results:
-                            st.success(f"Found {len(results)} results!")
-                            
-                            # Display results
-                            df = pd.DataFrame(results)
-                            st.dataframe(df, use_container_width=True)
-                            
-                            # Download option
-                            csv = df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download Results as CSV",
-                                data=csv,
-                                file_name=f"query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                mime="text/csv"
-                            )
-                        else:
-                            st.info("No results found for your query.")
-                            
-                    except Exception as e:
-                        st.error(f"Error processing query: {str(e)}")
-                        st.info("Please check your API key configuration and try again.")
-            else:
-                st.warning("Please enter a query.")
+                        # Display results
+                        df = pd.DataFrame(results)
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Download option
+                        csv = df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Results as CSV",
+                            data=csv,
+                            file_name=f"query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.info("No results found for your query. Try a different query or check if the database has relevant data.")
+                        
+                except Exception as e:
+                    st.error(f"Error processing query: {str(e)}")
+                    with st.expander("🔍 Error Details"):
+                        st.code(str(e))
+                    st.info("Please try a different query or check your API key configuration.")
+        
+        elif process_button and not user_query:
+            st.warning("Please enter a query.")
     
     except ImportError as e:
         st.error(f"Error importing query processor: {e}")

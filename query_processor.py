@@ -7,33 +7,54 @@ from typing import Optional, List, Dict, Any
 
 from openai import OpenAI
 
-# Initialize OpenAI client with better error handling
+# Global variable to hold the OpenAI client
 oai_client = None
 
-try:
-    import streamlit as st
-    # For Streamlit Cloud deployment
-    if "OPENAI_API_KEY" in st.secrets:
-        oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        print("✅ OpenAI client initialized with Streamlit secrets")
-    else:
-        print("⚠️  OPENAI_API_KEY not found in Streamlit secrets")
-        raise KeyError("OPENAI_API_KEY not in secrets")
-except (ImportError, KeyError) as e:
-    print(f"⚠️  Streamlit secrets not available ({e}), falling back to environment variable")
-    # For local development - you can set this as an environment variable
-    # or temporarily put your key here for local testing
-    api_key = os.environ.get('OPENAI_API_KEY', 'your_api_key_here_for_local_testing')
-    if api_key and api_key != 'your_api_key_here_for_local_testing':
-        try:
-            oai_client = OpenAI(api_key=api_key)
-            print("✅ OpenAI client initialized with environment variable")
-        except Exception as init_error:
-            print(f"❌ Failed to initialize OpenAI client: {init_error}")
-            oai_client = None
-    else:
-        print("❌ No valid OpenAI API key found")
-        oai_client = None
+def get_openai_client():
+    """Initialize and return OpenAI client with proper error handling"""
+    global oai_client
+    
+    if oai_client is not None:
+        return oai_client
+    
+    try:
+        import streamlit as st
+        # For Streamlit Cloud deployment
+        if "OPENAI_API_KEY" in st.secrets:
+            oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+            print("✅ OpenAI client initialized with Streamlit secrets")
+            return oai_client
+        else:
+            print("⚠️  OPENAI_API_KEY not found in Streamlit secrets")
+            raise KeyError("OPENAI_API_KEY not in secrets")
+    except (ImportError, KeyError) as e:
+        print(f"⚠️  Streamlit secrets not available ({e}), falling back to environment variable")
+        # For local development - you can set this as an environment variable
+        # or temporarily put your key here for local testing
+        api_key = os.environ.get('OPENAI_API_KEY', 'your_api_key_here_for_local_testing')
+        if api_key and api_key != 'your_api_key_here_for_local_testing':
+            try:
+                oai_client = OpenAI(api_key=api_key)
+                print("✅ OpenAI client initialized with environment variable")
+                return oai_client
+            except Exception as init_error:
+                print(f"❌ Failed to initialize OpenAI client: {init_error}")
+                raise Exception(f"Failed to initialize OpenAI client: {init_error}")
+        else:
+            print("❌ No valid OpenAI API key found")
+            raise Exception("No valid OpenAI API key found")
+    except Exception as e:
+        print(f"❌ Unexpected error initializing OpenAI client: {e}")
+        raise Exception(f"Failed to initialize OpenAI client: {e}")
+
+def check_openai_client():
+    """Check if OpenAI client can be properly initialized"""
+    try:
+        client = get_openai_client()
+        return client is not None
+    except Exception as e:
+        print(f"OpenAI client check failed: {e}")
+        return False
 
 # -------------------------
 # File paths and settings
@@ -117,16 +138,10 @@ def infer_sql_column_type(values: List[Any], column_name: str) -> str:
         print(f"[Error] Type inference failed: {str(e)}, defaulting to TEXT")
         return "TEXT"
 
-def check_openai_client():
-    """Check if OpenAI client is properly initialized"""
-    if oai_client is None:
-        raise Exception("OpenAI client is not initialized. Please check your API key configuration.")
-    return True
-
 def extract_fields_from_clause(clause: str, fields: List[str]) -> Dict[str, Any]:
     """Extract specified fields from a clause using LLM."""
     try:
-        check_openai_client()  # Ensure client is available
+        client = get_openai_client()  # Get client when needed
         
         fields_str = ", ".join(fields)
         prompt = f"""
@@ -150,7 +165,7 @@ def extract_fields_from_clause(clause: str, fields: List[str]) -> Dict[str, Any]
         Return ONLY a JSON object with the extracted fields.
         """
         
-        response = oai_client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are an extraction agent. Extract the requested fields and return them as a JSON object. For numeric fields, return the actual number without formatting."},
@@ -295,14 +310,14 @@ def store_records_sql(records: List[Dict[str, Any]], db_path: str, table_name: s
 def decide_query_type(query: str, known_fields: List[str]) -> str:
     """Determine if query is asking for known or new fields."""
     try:
-        check_openai_client()  # Ensure client is available
+        client = get_openai_client()  # Get client when needed
         
         prompt = (
             f"We have a dataset with extracted fields: {', '.join(known_fields)}. "
             f"Determine if the query: '{query}' is asking for information already extracted ('hit') "
             "or something new ('miss'). Return only 'hit' or 'miss'."
         )
-        resp = oai_client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a query decision agent."},
@@ -327,7 +342,7 @@ And the already known and extracted fields: [{known_fields_str}]
 Return your answer as a JSON object with two keys: "new_field" (string) and "parent_field" (string or null).
 """
     try:
-        resp = oai_client.chat.completions.create(
+        resp = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a field decision agent. Respond in JSON format as specified."},
@@ -387,7 +402,7 @@ def generate_filter_sql(query: str, schema: Dict[str, str], table_name: str = TA
     Return only the SQL query.
     """
     try:
-        resp = oai_client.chat.completions.create(
+        resp = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a SQL query generation agent."},
@@ -514,7 +529,7 @@ def generate_synthetic_clauses(field: str, num_clauses: int = 10) -> List[str]:
         Return the clauses as a JSON array of strings.
         """
         
-        response = oai_client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a legal contract clause generation agent. Generate realistic and diverse clauses with specific values."},
