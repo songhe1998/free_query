@@ -17,7 +17,7 @@ SQL_DB_PATH  = "clauses.db"
 TABLE_NAME   = "clauses"
 
 # Initialize OpenAI client
-oai_client = OpenAI(api_key="Akwh-w91wAmGahcNXuRfJjwwVpTsMyBWVQlRc_vmRpP_V_XCJw1nZ5C27xzdWgrKxkX1wNeKfT1HJFkblbT3RbXU8POI0qw1gb9HA_RbJfcZAFH9hQBZWUI5ND6PohLLgm5XayD_fJkOvvO3hn_jCsmD4OUAp1M-jorp-ks"[::-1])
+oai_client = OpenAI(api_key="AYprJB5zmDSB3aVdvpn0MA7pDswm3akvKUbi88phZuYID4YxSr6_rYsiG2Km8b2raMeTFPhzwANJFkblb3TptT6-Ut8BwAH9gwgpIOb7keJwgkXegl3l5Dz7YkMsiTvZoWMWxHHeGVKPS1JCV3fGU9Z7Eq5-l1F-tccavs-ks"[::-1])
 
 # -------------------------
 # Utility Functions
