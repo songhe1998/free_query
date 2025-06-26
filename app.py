@@ -161,41 +161,153 @@ def main():
         if process_button and user_query:
             with st.spinner("🤖 Multi-agent system processing..."):
                 try:
-                    # Show query classification
-                    from free_query_v3 import decide_query_type
-                    classification = decide_query_type(user_query, base_fields)
+                    # Create containers for real-time updates
+                    st.markdown("#### 🔍 Agent Processing Steps:")
                     
-                    if classification == "hit":
-                        query_type.success("🎯 HIT - Using existing fields")
+                    # Step 1: Query Classification
+                    with st.container():
+                        st.markdown("##### 🎯 Step 1: Query Decision Agent")
+                        classification_col1, classification_col2 = st.columns([1, 2])
+                        
+                        with classification_col1:
+                            with st.spinner("Analyzing query..."):
+                                from free_query_v3 import decide_query_type
+                                classification = decide_query_type(user_query, base_fields)
+                        
+                        with classification_col2:
+                            if classification == "hit":
+                                st.success("🎯 **HIT** - Using existing fields")
+                                st.info(f"Query can be answered with current fields: `{', '.join(base_fields)}`")
+                            else:
+                                st.info("🔍 **MISS** - Will discover new fields")
+                                st.warning("Query requires extraction of new fields from legal documents")
+                    
+                    # Step 2: Field Analysis
+                    st.markdown("##### 🧠 Step 2: Field Analysis")
+                    field_analysis_container = st.container()
+                    
+                    with field_analysis_container:
+                        if classification == "miss":
+                            field_col1, field_col2 = st.columns([1, 1])
+                            
+                            with field_col1:
+                                st.markdown("**🔍 New Field Discovery Agent:**")
+                                with st.spinner("Identifying new field..."):
+                                    from free_query_v3 import decide_new_field
+                                    new_field, parent_field = decide_new_field(user_query, base_fields)
+                                
+                                st.success(f"**New Field:** `{new_field}`")
+                                if parent_field:
+                                    st.info(f"**Parent Field:** `{parent_field}` (will optimize processing)")
+                                else:
+                                    st.info("**Parent Field:** None (will process all clauses)")
+                            
+                            with field_col2:
+                                st.markdown("**📊 Processing Strategy:**")
+                                if parent_field and parent_field in schema:
+                                    # Count clauses with parent field
+                                    import sqlite3
+                                    conn = sqlite3.connect(SQL_DB_PATH)
+                                    cur = conn.cursor()
+                                    sanitized_parent = new_field.replace(' ', '_').lower()  # Simple sanitization for display
+                                    try:
+                                        cur.execute(f'SELECT COUNT(*) FROM {TABLE_NAME} WHERE "{parent_field}" IS NOT NULL')
+                                        parent_count = cur.fetchone()[0]
+                                        st.metric("Clauses to Process", f"{parent_count} (optimized)", delta=f"-{50-parent_count} saved")
+                                    except:
+                                        st.metric("Clauses to Process", "50 (all clauses)")
+                                    conn.close()
+                                else:
+                                    st.metric("Clauses to Process", "50 (all clauses)")
+                        else:
+                            st.success("Using existing schema - no new field extraction needed")
+                            st.info(f"Will query existing fields: `{', '.join([f for f in base_fields if f.lower() in user_query.lower()][:3])}`")
+                    
+                    # Step 3: Processing Status
+                    st.markdown("##### ⚡ Step 3: Processing Execution")
+                    processing_container = st.container()
+                    
+                    with processing_container:
+                        # Create columns for different agent activities
+                        if classification == "miss":
+                            agent_col1, agent_col2, agent_col3 = st.columns([1, 1, 1])
+                            
+                            with agent_col1:
+                                st.markdown("**🔧 Field Extraction Agent:**")
+                                extraction_status = st.empty()
+                                extraction_status.info("🔄 Extracting fields from clauses...")
+                            
+                            with agent_col2:
+                                st.markdown("**🔗 Table Merge Agent:**")
+                                merge_status = st.empty()
+                                merge_status.info("⏳ Waiting for extraction...")
+                            
+                            with agent_col3:
+                                st.markdown("**🗄️ SQL Generation Agent:**")
+                                sql_status = st.empty()
+                                sql_status.info("⏳ Waiting for merge...")
+                        else:
+                            st.markdown("**🗄️ SQL Generation Agent:**")
+                            sql_status = st.empty()
+                            sql_status.info("🔄 Generating SQL query...")
+                    
+                    # Step 4: Execute Processing with Live Updates
+                    st.markdown("##### 📊 Step 4: Query Execution")
+                    
+                    # Capture processing output
+                    import io
+                    from contextlib import redirect_stdout
+                    
+                    output_buffer = io.StringIO()
+                    
+                    # Update status during processing
+                    if classification == "miss":
+                        extraction_status.warning("🔄 Extracting new field using LLM...")
+                        
+                    # Execute the query processing
+                    with redirect_stdout(output_buffer):
+                        handle_query(user_query, base_fields, schema)
+                    
+                    # Update final status
+                    if classification == "miss":
+                        extraction_status.success("✅ Field extraction completed")
+                        merge_status.success("✅ Database updated with new field")
+                        sql_status.success("✅ SQL query generated and executed")
                     else:
-                        query_type.info("🔍 MISS - Will discover new fields")
+                        sql_status.success("✅ SQL query executed successfully")
                     
-                    # Process with advanced system
-                    st.markdown("#### 📊 Processing Results:")
+                    # Step 5: Results Display
+                    st.markdown("##### 📈 Step 5: Results & Analysis")
                     
-                    # Create a container for real-time updates
-                    status_container = st.container()
+                    # Show processing log
+                    processing_log = output_buffer.getvalue()
+                    if processing_log:
+                        with st.expander("🔍 Detailed Processing Log", expanded=False):
+                            st.code(processing_log, language="text")
                     
-                    with status_container:
-                        # Capture and display the processing steps
-                        import io
-                        from contextlib import redirect_stdout
+                    # Show updated schema if new field was added
+                    if classification == "miss":
+                        st.markdown("**📊 Database Schema Updated:**")
+                        # Reload schema to show new field
+                        conn = sqlite3.connect(SQL_DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute(f'PRAGMA table_info("{TABLE_NAME}")')
+                        updated_schema = {col[1]: col[2] for col in cur.fetchall()}
+                        conn.close()
                         
-                        output_buffer = io.StringIO()
-                        
-                        # Run the advanced query handler
-                        with redirect_stdout(output_buffer):
-                            handle_query(user_query, base_fields, schema)
-                        
-                        # Display processing log
-                        processing_log = output_buffer.getvalue()
-                        if processing_log:
-                            with st.expander("🔍 Processing Log"):
-                                st.code(processing_log)
+                        schema_col1, schema_col2 = st.columns([1, 1])
+                        with schema_col1:
+                            st.markdown("**Before:**")
+                            st.code(f"Fields: {list(schema.keys())}", language="python")
+                        with schema_col2:
+                            st.markdown("**After:**")
+                            new_fields = [f for f in updated_schema.keys() if f not in schema]
+                            st.code(f"Fields: {list(updated_schema.keys())}", language="python")
+                            if new_fields:
+                                st.success(f"✅ Added: {new_fields}")
                     
-                    # Reload schema and show updated results
+                    # Display query results
                     if os.path.exists(SQL_DB_PATH):
-                        # Get updated results
                         conn = sqlite3.connect(SQL_DB_PATH)
                         
                         # Show sample results
@@ -203,7 +315,19 @@ def main():
                         conn.close()
                         
                         if not df.empty:
-                            st.success(f"✅ Database updated! Showing sample results:")
+                            st.markdown("**📋 Query Results:**")
+                            
+                            # Show results summary
+                            result_col1, result_col2, result_col3 = st.columns([1, 1, 1])
+                            with result_col1:
+                                st.metric("Total Results", len(df))
+                            with result_col2:
+                                st.metric("Fields Returned", len(df.columns))
+                            with result_col3:
+                                non_null_cols = sum(1 for col in df.columns if df[col].notna().any())
+                                st.metric("Fields with Data", non_null_cols)
+                            
+                            # Display the data
                             st.dataframe(df, use_container_width=True)
                             
                             # Download option
@@ -211,17 +335,45 @@ def main():
                             st.download_button(
                                 label="📥 Download Results as CSV",
                                 data=csv,
-                                file_name=f"advanced_query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                file_name=f"query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                 mime="text/csv"
                             )
+                            
+                            # Show sample data insights
+                            with st.expander("📊 Data Insights", expanded=False):
+                                for col in df.columns:
+                                    if col != 'clause' and df[col].notna().any():
+                                        non_null_count = df[col].notna().sum()
+                                        st.write(f"**{col}:** {non_null_count}/{len(df)} entries have data")
+                        else:
+                            st.info("No results found for your query.")
+                    
+                    # Step 6: Next Steps Suggestions
+                    st.markdown("##### 🚀 Step 6: What's Next?")
+                    
+                    if classification == "miss":
+                        st.success("🎉 **New field successfully added to your database!**")
+                        st.info("💡 **Try related queries:** This new field can now be used in future queries for instant results.")
                         
-                        # Update the fields display
-                        # st.rerun()  # Removed to preserve results
+                        # Suggest related queries
+                        suggestions = [
+                            f"Show me {new_field} greater than [value]",
+                            f"Find clauses with specific {new_field}",
+                            f"Compare {new_field} across different companies"
+                        ]
+                        st.markdown("**🔍 Suggested follow-up queries:**")
+                        for suggestion in suggestions:
+                            st.markdown(f"• `{suggestion}`")
+                    else:
+                        st.success("🎯 **Query executed using existing data!**")
+                        st.info("💡 **Try exploring:** Ask about new fields to expand your database capabilities.")
                         
                 except Exception as e:
-                    st.error(f"Error in advanced processing: {str(e)}")
+                    st.error(f"❌ Error in advanced processing: {str(e)}")
                     with st.expander("🔍 Error Details"):
                         st.code(str(e))
+                        import traceback
+                        st.code(traceback.format_exc())
         
         elif process_button and not user_query:
             st.warning("Please enter a query.")
