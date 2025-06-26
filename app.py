@@ -186,6 +186,10 @@ def main():
                     st.markdown("##### 🧠 Step 2: Field Analysis")
                     field_analysis_container = st.container()
                     
+                    # Initialize variables to avoid scoping issues
+                    new_field = None
+                    parent_field = None
+                    
                     with field_analysis_container:
                         if classification == "miss":
                             field_col1, field_col2 = st.columns([1, 1])
@@ -206,7 +210,6 @@ def main():
                                 st.markdown("**📊 Processing Strategy:**")
                                 if parent_field and parent_field in schema:
                                     # Count clauses with parent field
-                                    import sqlite3
                                     conn = sqlite3.connect(SQL_DB_PATH)
                                     cur = conn.cursor()
                                     sanitized_parent = new_field.replace(' ', '_').lower()  # Simple sanitization for display
