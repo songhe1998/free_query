@@ -4,14 +4,22 @@ import random
 from typing import List, Dict, Any
 from openai import OpenAI
 
+# Try to import streamlit for secrets, fallback to environment variable
+try:
+    import streamlit as st
+    # For Streamlit Cloud deployment
+    oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except (ImportError, KeyError):
+    # For local development - you can set this as an environment variable
+    # or temporarily put your key here for local testing
+    api_key = os.environ.get('OPENAI_API_KEY', 'your_api_key_here_for_local_testing')
+    oai_client = OpenAI(api_key=api_key)
+
 # -------------------------
 # File paths and settings
 # -------------------------
 OUTPUT_PATH = "synthetic_clauses.jsonl"
 CLAUSE_LIMIT = 50  # Increased for better coverage
-
-# Initialize OpenAI client
-oai_client = OpenAI(api_key="AYprJB5zmDSB3aVdvpn0MA7pDswm3akvKUbi88phZuYID4YxSr6_rYsiG2Km8b2raMeTFPhzwANJFkblb3TptT6-Ut8BwAH9gwgpIOb7keJwgkXegl3l5Dz7YkMsiTvZoWMWxHHeGVKPS1JCV3fGU9Z7Eq5-l1F-tccavs-ks"[::-1])
 
 # Define hierarchical fields structure
 FIELD_HIERARCHY = {
