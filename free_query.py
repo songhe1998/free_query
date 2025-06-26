@@ -19,7 +19,7 @@ except (ImportError, KeyError):
 # File paths and settings
 # -------------------------
 BASE_INFO_PATH = "extracted_clauses.csv"
-LEDGAR_PATH = "/Users/songhewang/Downloads/LEDGAR_2016-2019_clean.jsonl"
+LEDGAR_PATH = "synthetic_clauses.jsonl"
 CLAUSE_LIMIT = 100  # for testing; remove or adjust as needed
 SQL_DB_PATH = "clauses.db"
 TABLE_NAME = "clauses"

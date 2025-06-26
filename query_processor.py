@@ -59,7 +59,7 @@ def check_openai_client():
 # -------------------------
 # File paths and settings
 # -------------------------
-LEDGAR_PATH  = "/Users/songhewang/Downloads/LEDGAR_2016-2019_clean.jsonl"
+LEDGAR_PATH  = "synthetic_clauses.jsonl"
 CLAUSE_LIMIT = 10
 SQL_DB_PATH  = "clauses.db"
 TABLE_NAME   = "clauses"
