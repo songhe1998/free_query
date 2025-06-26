@@ -7,16 +7,33 @@ from typing import Optional, List, Dict, Any
 
 from openai import OpenAI
 
-# Try to import streamlit for secrets, fallback to environment variable
+# Initialize OpenAI client with better error handling
+oai_client = None
+
 try:
     import streamlit as st
     # For Streamlit Cloud deployment
-    oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except (ImportError, KeyError):
+    if "OPENAI_API_KEY" in st.secrets:
+        oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        print("✅ OpenAI client initialized with Streamlit secrets")
+    else:
+        print("⚠️  OPENAI_API_KEY not found in Streamlit secrets")
+        raise KeyError("OPENAI_API_KEY not in secrets")
+except (ImportError, KeyError) as e:
+    print(f"⚠️  Streamlit secrets not available ({e}), falling back to environment variable")
     # For local development - you can set this as an environment variable
     # or temporarily put your key here for local testing
     api_key = os.environ.get('OPENAI_API_KEY', 'your_api_key_here_for_local_testing')
-    oai_client = OpenAI(api_key=api_key)
+    if api_key and api_key != 'your_api_key_here_for_local_testing':
+        try:
+            oai_client = OpenAI(api_key=api_key)
+            print("✅ OpenAI client initialized with environment variable")
+        except Exception as init_error:
+            print(f"❌ Failed to initialize OpenAI client: {init_error}")
+            oai_client = None
+    else:
+        print("❌ No valid OpenAI API key found")
+        oai_client = None
 
 # -------------------------
 # File paths and settings
@@ -100,9 +117,17 @@ def infer_sql_column_type(values: List[Any], column_name: str) -> str:
         print(f"[Error] Type inference failed: {str(e)}, defaulting to TEXT")
         return "TEXT"
 
+def check_openai_client():
+    """Check if OpenAI client is properly initialized"""
+    if oai_client is None:
+        raise Exception("OpenAI client is not initialized. Please check your API key configuration.")
+    return True
+
 def extract_fields_from_clause(clause: str, fields: List[str]) -> Dict[str, Any]:
     """Extract specified fields from a clause using LLM."""
     try:
+        check_openai_client()  # Ensure client is available
+        
         fields_str = ", ".join(fields)
         prompt = f"""
         Extract the following fields from this clause: {fields_str}
@@ -269,12 +294,14 @@ def store_records_sql(records: List[Dict[str, Any]], db_path: str, table_name: s
 
 def decide_query_type(query: str, known_fields: List[str]) -> str:
     """Determine if query is asking for known or new fields."""
-    prompt = (
-        f"We have a dataset with extracted fields: {', '.join(known_fields)}. "
-        f"Determine if the query: '{query}' is asking for information already extracted ('hit') "
-        "or something new ('miss'). Return only 'hit' or 'miss'."
-    )
     try:
+        check_openai_client()  # Ensure client is available
+        
+        prompt = (
+            f"We have a dataset with extracted fields: {', '.join(known_fields)}. "
+            f"Determine if the query: '{query}' is asking for information already extracted ('hit') "
+            "or something new ('miss'). Return only 'hit' or 'miss'."
+        )
         resp = oai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
