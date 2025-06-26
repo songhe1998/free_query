@@ -216,7 +216,7 @@ def main():
                             )
                         
                         # Update the fields display
-                        st.experimental_rerun()
+                        st.rerun()
                         
                 except Exception as e:
                     st.error(f"Error in advanced processing: {str(e)}")
@@ -299,7 +299,7 @@ def rebuild_database():
             base_fields, schema = construct_db_from_ledgar()
         
         st.success("✅ Database rebuilt successfully!")
-        st.experimental_rerun()
+        st.rerun()
         
     except Exception as e:
         st.error(f"Error rebuilding database: {e}")
