@@ -76,7 +76,7 @@ def infer_sql_column_type_rule_list(
         """
 
         response = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a SQL schema inference agent. Return only the type name."},
                 {"role": "user", "content": prompt}
@@ -397,7 +397,28 @@ def generate_filter_sql(
         return f"SELECT * FROM {table_name}"
 
 def execute_generated_sql(sql_code: str, db_path: str):
-    sql = sql_code.replace("```sql", "").replace("```", "").strip().strip('"""')
+    sql = sql_code.strip()
+    
+    # Clean up the SQL query - remove markdown formatting
+    if sql.startswith('```sql'):
+        sql = sql[6:]  # Remove ```sql
+    if sql.startswith('```'):
+        sql = sql[3:]   # Remove ```
+    if sql.endswith('```'):
+        sql = sql[:-3]  # Remove trailing ```
+    
+    # Remove comments and clean up
+    lines = sql.split('\n')
+    clean_lines = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('--'):
+            clean_lines.append(line)
+    sql = ' '.join(clean_lines)
+    
+    # Remove triple quotes if present
+    sql = sql.strip('"""').strip("'''")
+    
     print(f"Executing SQL:\n{sql}\n")
     conn = sqlite3.connect(db_path)
     cur  = conn.cursor()
