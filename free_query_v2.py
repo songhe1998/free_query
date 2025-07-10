@@ -175,20 +175,11 @@ def get_schema_description_list(schema: Dict[str, str]) -> str:
 
 
 def extract_fields_from_clause(clause: str, fields: List[str]) -> Dict[str, Any]:
-    clause += f" zebra percentage: {random.random()}"
     """
-    Extract specified fields from a clause using standard completion API.
-    
-    Args:
-        clause: The clause text to analyze
-        fields: List of fields to extract
-        
-    Returns:
-        Dict[str, Any]: Dictionary containing the extracted fields
+    Extract specified fields from a clause using an LLM.
     """
     try:
-        # Create a prompt that instructs the model to extract specific fields
-        fields_str = ", ".join(fields)
+        fields_str = ", ".join(f'"{f}"' for f in fields)
         prompt = f"""
         Extract the following fields from this clause: {fields_str}
         
@@ -367,7 +358,14 @@ if __name__ == "__main__":
         schema = infer_schema_from_records(recs)
         base_fields = [col for col in schema if col != "clause"]
 
+    print("\nAvailable fields in the database:")
+    for field in base_fields:
+        print(f"- {field}")
+
+    # Run tests
+    # run_tests() # This line was not in the new_code, so it's removed.
+
     # Example usage
-    user_query = "I want all the clauses that has zebra percentage greater than 0.5"
+    user_query = "I want all the clauses that has black company more than 0.5"
     print("\nHandling query:", user_query)
     handle_query(user_query, base_fields, schema)

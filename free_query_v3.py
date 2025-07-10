@@ -10,15 +10,26 @@ from openai import OpenAI
 from tqdm import tqdm
 
 # Try to import streamlit for secrets, fallback to environment variable
-try:
-    import streamlit as st
-    # For Streamlit Cloud deployment
-    oai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except (ImportError, KeyError):
-    # For local development - you can set this as an environment variable
-    # or temporarily put your key here for local testing
-    api_key = os.environ.get('OPENAI_API_KEY', 'your_api_key_here_for_local_testing')
-    oai_client = OpenAI(api_key=api_key)
+def get_openai_client():
+    """Get OpenAI client with proper API key handling"""
+    try:
+        import streamlit as st
+        # For Streamlit Cloud deployment - check if secrets are available
+        if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
+            return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        else:
+            # Streamlit is available but secrets are not configured
+            raise KeyError("OPENAI_API_KEY not in streamlit secrets")
+    except (ImportError, KeyError):
+        # For local development - you can set this as an environment variable
+        # or temporarily put your key here for local testing
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            api_key = 'your_api_key_here_for_local_testing'
+        return OpenAI(api_key=api_key)
+
+# Legacy support - but we'll use get_openai_client() in functions
+oai_client = get_openai_client()
 
 # -------------------------
 # File paths and settings
@@ -75,7 +86,8 @@ def infer_sql_column_type_rule_list(
         Return ONLY one of these exact words: REAL, DATE, or TEXT
         """
 
-        response = oai_client.chat.completions.create(
+        client = get_openai_client()
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a SQL schema inference agent. Return only the type name."},
@@ -222,81 +234,63 @@ def get_schema_description_list(schema: Dict[str, str]) -> str:
     return ", ".join(parts)
 
 
+# -------------------------
+# Agent 3: Field Extraction Agent
+# -------------------------
 def extract_fields_from_clause(clause: str, fields: List[str]) -> Dict[str, Any]:
-    clause += f" zebra percentage: {random.random()}"
     """
-    Extract specified fields from a clause using standard completion API.
-    
-    Args:
-        clause: The clause text to analyze
-        fields: List of fields to extract
-        
-    Returns:
-        Dict[str, Any]: Dictionary containing the extracted fields
+    Extract specified fields from a clause using an LLM.
     """
     try:
-        # Create a prompt that instructs the model to extract specific fields
-        fields_str = ", ".join(fields)
+        fields_str = ", ".join(f'"{f}"' for f in fields)
         prompt = f"""
-        Extract the following fields from this clause: {fields_str}
+        Extract the following fields from the clause below: {fields_str}
         
-        Clause: {clause}
+        Clause: "{clause}"
         
-        Return ONLY a JSON object with the extracted fields. If the field is date, return the date in YYYY-MM-DD format. Do not include any explanations. 
+        Return ONLY a JSON object with the extracted fields.
+        - If a field is not present, the value should be null.
+        - If a date is found, format it as YYYY-MM-DD.
         """
         
-        # Use standard completion API
-        response = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "You are an extraction agent. Extract the requested fields and return them as a JSON object."},
+                {"role": "system", "content": "You are a field extraction agent. Return only JSON."},
                 {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"}  # This helps ensure JSON output
+            ]
         )
         
-        # Extract the response text and parse as JSON
-        response_text = response.choices[0].message.content
-        result = json.loads(response_text)
-        print(clause)
-        print(result)
+        extracted_data = json.loads(response.choices[0].message.content)
         
-        # Ensure all requested fields are in the result
-        for field in fields:
-            if field not in result:
-                result[field] = None
-        result['clause'] = clause
-        return result
-        
-    except json.JSONDecodeError as e:
-        print(f"[Error] Failed to parse JSON response: {e}")
-        print(f"[Error] Raw response: {response_text}")
-        # Return a dictionary with None values for all fields
-        return {field: None for field in fields}
-        
+        # Add the original clause to the output
+        extracted_data['clause'] = clause
+        return extracted_data
+
     except Exception as e:
-        print(f"[Error] Extraction failed: {str(e)}")
-        # Return a dictionary with None values for all fields
-        return {field: None for field in fields}
+        print(f"Field extraction failed for clause: {clause[:50]}... Error: {str(e)}")
+        return {"clause": clause}
 
 # -------------------------
 # Step 1: Construct DB from LEDGAR
 # -------------------------
 def construct_db_from_ledgar() -> (List[str], Dict[str, str]):
+    """
+    Load clauses from the LEDGAR JSONL file, extract initial fields,
+    and store them in a new SQLite database.
+    """
+    print(f"Constructing database from '{LEDGAR_PATH}'...")
     with open(LEDGAR_PATH, "r") as f:
+        # Load raw clauses from the JSONL file
         raw = [json.loads(line)["provision"] for line in f][:CLAUSE_LIMIT]
 
-    # 50% randomly append " effective date: YYYY-MM-DD"
+    # Add a random date to each clause for testing date functionality
     clauses = [
-        c + (f" effective date: {random_date()}" if random.random() < 0.8 else " ")
+        c + (f" effective date: {random_date()}" if random.random() < 0.5 else "")
         for c in raw
     ]
-
-    clauses = [
-        c + (f"zebra percentage: {random.random()}")
-        for c in raw
-    ]
-
 
     base_fields = ['company']
     records = [extract_fields_from_clause(c, base_fields) for c in tqdm(clauses)]
@@ -304,97 +298,115 @@ def construct_db_from_ledgar() -> (List[str], Dict[str, str]):
     return base_fields, schema
 
 # -------------------------
-# Step 2: Query Handling Agents
+# Agent 1: Query Decision Agent
 # -------------------------
 def decide_query_type(query: str, known_fields: List[str]) -> str:
-    prompt = (
-        f"We have a dataset with extracted fields: {', '.join(known_fields)}. "
-        f"Determine if the query: '{query}' is asking for information already extracted ('hit') "
-        "or something new ('miss'). Return only 'hit' or 'miss'."
-    )
+    """
+    Decide if the query is a "hit" (can be answered by existing fields)
+    or a "miss" (requires extracting new fields).
+    """
     try:
-        resp = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        # Create a prompt that asks the model to classify the query
+        known_fields_str = ", ".join(known_fields)
+        prompt = f"""
+        Given the available fields: [{known_fields_str}]
+        
+        Classify the following user query as either a "hit" or a "miss".
+        - A "hit" means the query can be answered using only the available fields.
+        - A "miss" means the query requires extracting new information not covered by the available fields.
+        
+        Query: "{query}"
+        
+        Return ONLY the word "hit" or "miss".
+        """
+        
+        # Use a less powerful model for this simpler task
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a query decision agent."},
-                {"role": "user",   "content": prompt}
+                {"role": "system", "content": "You are a query classification agent."},
+                {"role": "user", "content": prompt}
             ]
         )
-        decision = resp.choices[0].message.content.strip().lower()
-        if decision in ("hit", "miss"):
-            return decision
-    except:
-        pass
-    return "hit" if any(f.lower() in query.lower() for f in known_fields) else "miss"
+        
+        # The result should be either "hit" or "miss"
+        result = response.choices[0].message.content.strip().lower()
+        
+        # Basic validation
+        if result not in ["hit", "miss"]:
+            print(f"[Warning] Unexpected classification: {result}, defaulting to 'miss'")
+            return "miss"
+            
+        return result
 
+    except Exception as e:
+        print(f"[Error] Query classification failed: {str(e)}, defaulting to 'miss'")
+        return "miss"
+
+
+# -------------------------
+# Agent 4: SQL Generation Agent
+# -------------------------
 def generate_filter_sql(
     query: str,
     schema: Dict[str, str],
     table_name: str = TABLE_NAME
 ) -> str:
-    schema_desc = get_schema_description_list(schema)
-    prompt = (
-        f"Given the SQL table structure: {schema_desc} and the query: '{query}', "
-        f"generate SQL code to retrieve rows from the table '{table_name}'. "
-        "For numeric comparisons, use CAST(column AS REAL) instead of ::REAL. "
-        "Ensure output formats: REAL→number, DATE→'YYYY-MM-DD', TEXT→string. "
-        "Always quote column names with spaces using double quotes. "
-        "Use the exact table name '{table_name}' in the query. "
-        "Return only the SQL query in a triple-quoted string."
-    )
+    """
+    Given a query and a db schema, use an LLM to generate a SQL WHERE clause.
+    """
     try:
-        resp = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        schema_desc = get_schema_description_list(schema)
+        prompt = f"""
+        Given the database schema:
+        - Table name: {table_name}
+        - Columns: {schema_desc}
+        
+        Generate a SQL WHERE clause for the following user query.
+        - Query: "{query}"
+        - The clause should be syntactically correct for SQLite.
+        - Do NOT include the "WHERE" keyword itself.
+        - If a column is of type REAL, you may need to CAST it for comparison.
+        - Return ONLY the SQL condition, without any markdown formatting, code blocks, or backticks.
+        - Do NOT wrap the response in ```sql``` or any other formatting.
+        
+        IMPORTANT GUIDELINES:
+        1. If the query is asking for content within clauses (like "clauses that contain X"), search within the 'clause' column using LIKE patterns
+        2. Use LIKE '%keyword%' for text searches within clause content
+        3. For queries about small companies, search for terms like 'small', 'SME', 'small to medium', 'small-sized' in the clause text
+        4. If a specific field exists but might be empty, also search the clause text as a fallback
+        5. Use OR conditions to search multiple related terms
+        6. For duration/term queries, search for 'duration', 'term', 'period', 'months', 'years' in clause text
+        7. For payment queries, search for 'payment', 'pay', 'fee', 'compensation', 'payable' in clause text
+        
+        Examples:
+        - "Show amounts over 1000": CAST(amount AS REAL) > 1000
+        - "Find clauses about small companies": clause LIKE '%small%' OR clause LIKE '%SME%' OR clause LIKE '%small to medium%'
+        - "What clauses mention termination": clause LIKE '%termination%' OR clause LIKE '%terminate%'
+        - "Find agreement duration": clause LIKE '%duration%' OR clause LIKE '%term%' OR clause LIKE '%period%' OR clause LIKE '%months%' OR clause LIKE '%years%'
+        - "Find payment terms": clause LIKE '%payment%' OR clause LIKE '%pay%' OR clause LIKE '%fee%' OR clause LIKE '%compensation%' OR clause LIKE '%payable%'
+        """
+        
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a SQL query generation agent. Use SQLite-compatible syntax, properly quote column names with spaces, and use the exact table name provided."},
-                {"role": "user",   "content": prompt}
+                {"role": "system", "content": "You are a SQL generation agent for SQLite. Generate appropriate WHERE conditions for content searches. Return only the SQL condition without any formatting."},
+                {"role": "user", "content": prompt}
             ]
         )
-        sql = resp.choices[0].message.content.strip()
         
-        # Find the field being queried
-        field_name = None
-        sanitized_field_name = None
-        for field in schema.keys():
-            if field.lower() in query.lower():
-                field_name = field
-                sanitized_field_name = sanitize_field_name(field)
-                break
-                
-        if field_name and sanitized_field_name:
-            # Always add a WHERE clause to filter out NULL values for the requested field
-            if "WHERE" not in sql.upper():
-                sql = f"SELECT * FROM {table_name} WHERE \"{sanitized_field_name}\" IS NOT NULL"
-            else:
-                # If there's already a WHERE clause, add the NOT NULL condition
-                sql = sql.replace("WHERE", f"WHERE \"{sanitized_field_name}\" IS NOT NULL AND")
+        result = response.choices[0].message.content.strip()
         
-        # Ensure we're selecting from the correct table and using SELECT *
-        if "FROM" not in sql.upper():
-            sql = f"SELECT * FROM {table_name}"
-        elif not any(table_name.lower() in part.lower() for part in sql.split()):
-            sql = sql.replace("FROM", f"FROM {table_name}")
-            
-        # Fix any redundant column selections
-        sql = sql.replace("SELECT *,", "SELECT *")
-        sql = sql.replace("SELECT *, ", "SELECT *")
+        # Clean up any remaining markdown formatting
+        result = result.replace('```sql', '').replace('```', '').strip()
         
-        # Replace any spaces in column names with underscores
-        for field in schema.keys():
-            sanitized = sanitize_field_name(field)
-            if field != sanitized:
-                sql = sql.replace(f'"{field}"', f'"{sanitized}"')
-                sql = sql.replace(f"'{field}'", f'"{sanitized}"')
-                sql = sql.replace(field, sanitized)
-            
-        print(f"\nGenerated SQL query:\n{sql}")
-        return sql
+        return result
+        
     except Exception as e:
-        print(f"[Error] SQL generation failed: {e}")
-        # If we know the field name, include the NOT NULL condition
-        if field_name and sanitized_field_name:
-            return f'SELECT * FROM {table_name} WHERE "{sanitized_field_name}" IS NOT NULL'
-        return f"SELECT * FROM {table_name}"
+        print(f"SQL generation failed: {str(e)}")
+        return "1=0" # Return a condition that returns no results
 
 def execute_generated_sql(sql_code: str, db_path: str):
     sql = sql_code.strip()
@@ -416,8 +428,15 @@ def execute_generated_sql(sql_code: str, db_path: str):
             clean_lines.append(line)
     sql = ' '.join(clean_lines)
     
-    # Remove triple quotes if present
-    sql = sql.strip('"""').strip("'''")
+    # Remove triple quotes if present (but not individual quotes)
+    if sql.startswith('"""') and sql.endswith('"""'):
+        sql = sql[3:-3]
+    elif sql.startswith("'''") and sql.endswith("'''"):
+        sql = sql[3:-3]
+    
+    # Additional cleaning for common markdown artifacts
+    sql = sql.replace('```sql', '').replace('```', '')
+    sql = sql.strip()
     
     print(f"Executing SQL:\n{sql}\n")
     conn = sqlite3.connect(db_path)
@@ -435,64 +454,67 @@ def execute_generated_sql(sql_code: str, db_path: str):
         fixed_sql = sql.replace("clause", TABLE_NAME)
         fixed_sql = fixed_sql.replace("black company percentage", '"black_company_percentage"')
         print(f"Retrying with fixed SQL:\n{fixed_sql}\n")
-        cur.execute(fixed_sql)
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description] if cur.description else []
-        for row in rows:
-            print(dict(zip(cols, row)))
+        try:
+            cur.execute(fixed_sql)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if cur.description else []
+            for row in rows:
+                print(dict(zip(cols, row)))
+        except sqlite3.Error as e2:
+            print(f"Fixed SQL also failed: {e2}")
+            raise e2
     finally:
         conn.close()
 
+# Agent 2: New Field Discovery Agent
+# -------------------------
 def decide_new_field(query: str, known_fields: List[str]) -> (str, Optional[str]):
     """
-    Given a query and known fields, determine the new field to extract and
-    a potential parent field from the known fields.
-    Returns (new_field_name, parent_field_name_or_None).
+    From a "miss" query, decide what new field to extract.
+    Also, try to find a parent field to optimize processing.
     """
-    known_fields_str = ", ".join(known_fields) if known_fields else "None"
-    prompt = f"""
-Given the query: '{query}'
-And the already known and extracted fields: [{known_fields_str}]
-
-1. Determine the primary new field that needs to be extracted from clauses to answer the query.
-2. If this new field is a more specific version or a sub-category of one of the KNOWN fields, identify that known field as the 'parent field'. For example, if 'effective date' is new and 'date' is known, 'date' is the parent. If 'termination fee amount' is new and 'fee amount' is known, 'fee amount' could be the parent. If no clear parent relationship exists or known fields are None, the parent_field should be null.
-
-Return your answer as a JSON object with two keys: "new_field" (string, e.g., "effective date") and "parent_field" (string or null, e.g., "date" or null).
-Example for query 'What is the effective date?' and known fields ['date', 'company']: {{"new_field": "effective date", "parent_field": "date"}}
-Example for query 'Find termination clauses.' and known fields ['date', 'company']: {{"new_field": "termination clause type", "parent_field": null}}
-"""
     try:
-        resp = oai_client.chat.completions.create(
-            model="gpt-4o-mini",
+        known_fields_str = ", ".join(known_fields)
+        prompt = f"""
+        A user query could not be answered with the available fields: [{known_fields_str}].
+        
+        User Query: "{query}"
+        
+        Based on this query, what is the single most likely new field the user wants to extract?
+        - Name the field using snake_case (e.g., termination_fee, effective_date).
+        - The field should be a column in a database.
+        
+        Also, does this new field seem to be a sub-category of any of the existing fields?
+        - If yes, name the parent field from the available fields list.
+        - If no, the parent field is "None".
+        
+        Return a JSON object with two keys: "new_field" and "parent_field".
+        """
+        
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "You are a field decision agent. Respond in JSON format as specified."},
-                {"role": "user",   "content": prompt}
-            ],
-            response_format={"type": "json_object"}
+                {"role": "system", "content": "You are a field discovery agent. Return only JSON."},
+                {"role": "user", "content": prompt}
+            ]
         )
-        content = resp.choices[0].message.content.strip()
-        result = json.loads(content)
         
-        new_field = result.get("new_field")
-        parent_field = result.get("parent_field")
+        data = json.loads(response.choices[0].message.content)
+        new_field = data.get("new_field")
+        parent_field = data.get("parent_field")
         
-        if not new_field: # Basic validation
-            print(f"[Warning] LLM did not return a 'new_field'. Raw response: {content}. Defaulting.")
-            # Basic fallback, trying to derive from query
-            derived_new_field = query.lower().replace("what is the", "").replace("find", "").replace("what is", "").replace("show me", "").strip()
-            return derived_new_field if derived_new_field else "unknown_new_field", None
-
-        # Ensure parent_field is None if it's "None", "null", or empty string from LLM
-        if isinstance(parent_field, str) and parent_field.lower() in ["none", "null", ""]:
+        if parent_field == "None" or parent_field not in known_fields:
             parent_field = None
             
         return new_field, parent_field
-        
+
     except Exception as e:
-        # Fallback in case of LLM error or JSON parsing error
-        print(f"[Error] in decide_new_field: {e}. Raw content possibly: {content if 'content' in locals() else 'N/A'}. Defaulting new_field from query.")
-        derived_new_field = query.lower().replace("what is the", "").replace("find", "").replace("what is", "").replace("show me", "").strip()
-        return derived_new_field if derived_new_field else "unknown_new_field_on_error", None
+        print(f"Field discovery failed: {str(e)}")
+        # Fallback: create a simple field name from the query
+        new_field = "extracted_" + query.lower().replace(" ", "_")[:20]
+        return new_field, None
 
 def merge_new_fields_to_main_table(
     new_table_name: str,
@@ -556,89 +578,69 @@ def merge_new_fields_to_main_table(
         conn.close()
 
 def handle_query(query: str, base_fields: List[str], schema: Dict[str, str]):
-    decision = decide_query_type(query, base_fields)
-    if decision == "hit":
-        sql = generate_filter_sql(query, schema, TABLE_NAME)
-        execute_generated_sql(sql, SQL_DB_PATH)
-    else: # miss
+    """
+    Main orchestrator for handling a user's query.
+    This function coordinates all the agents to process the query.
+    """
+    print(f"\nHandling query: '{query}'")
+    
+    # Step 1: Decide query type
+    print("\nStep 1: Deciding query type (hit or miss)...")
+    classification = decide_query_type(query, base_fields)
+    print(f"Query classified as: {classification.upper()}")
+    
+    if classification == "miss":
+        # Step 2: Decide and extract new field
+        print("\nStep 2: Deciding new field to extract...")
         new_field, parent_field = decide_new_field(query, base_fields)
+        print(f"New field to extract: '{new_field}' (Parent: {parent_field})")
         
-        if not new_field:
-            print("[Error] Critical: new_field is None or empty after decide_new_field. Aborting miss handling for this query.")
-            return
-
-        print(f"[Miss] Query: '{query}'. Attempting to extract new field: '{new_field}'. Parent field hint: '{parent_field}'")
-
-        clauses_to_process: List[str] = []
-
-        if parent_field and parent_field in schema:
-            print(f"Parent field '{parent_field}' found in existing schema. Attempting to subset clauses from '{TABLE_NAME}'.")
-            conn = None
-            try:
-                conn = sqlite3.connect(SQL_DB_PATH)
-                cur = conn.cursor()
-                sanitized_parent = sanitize_field_name(parent_field)
-                subset_query_sql = f'SELECT clause FROM "{TABLE_NAME}" WHERE "{sanitized_parent}" IS NOT NULL'
-                print(f"Executing SQL to get subset of clauses: {subset_query_sql}")
-                cur.execute(subset_query_sql)
-                
-                rows = cur.fetchall()
-                if rows:
-                    clauses_to_process = [row[0] for row in rows if row[0] is not None] 
-                    if clauses_to_process:
-                        print(f"Found {len(clauses_to_process)} candidate clauses based on parent field '{parent_field}'.")
-                    else:
-                        print(f"No non-null clauses found with parent field '{parent_field}' having a value. Will process all clauses from source.")
-                else:
-                    print(f"No clauses rows returned with parent field '{parent_field}' having a value. Will process all clauses from source.")
-            except sqlite3.Error as e:
-                print(f"SQL error when trying to subset clauses: {e}. Will process all clauses from source.")
-                clauses_to_process = []
-            finally:
-                if conn:
-                    conn.close()
-        else:
-            if parent_field:
-                print(f"Parent field '{parent_field}' was suggested but not found in the current schema of '{TABLE_NAME}' or was None. Will process all clauses from source.")
-            else:
-                print("No parent field identified or applicable. Will process all clauses from source.")
-
-        if not clauses_to_process:
-            print(f"Loading and processing all {CLAUSE_LIMIT} clauses from LEDGAR for field '{new_field}'.")
-            with open(LEDGAR_PATH, "r") as f:
-                raw_base_clauses = [json.loads(line)["provision"] for line in f][:CLAUSE_LIMIT]
-            
-            clauses_to_process = [
-                c + (f" effective date: {random_date()}" if random.random() < 0.5 else "")
-                for c in raw_base_clauses
-            ]
-
-        print(f"Extracting '{new_field}' from {len(clauses_to_process)} clauses.")
-        records = [extract_fields_from_clause(c, [new_field]) for c in tqdm(clauses_to_process)]
-        
-        sanitized_new_field_name = sanitize_field_name(new_field)
-        if not sanitized_new_field_name:
-            sanitized_new_field_name = "extracted_field"
-            
-        new_table_name = f"extracted_{sanitized_new_field_name}"
-        
-        print(f"Storing extracted records for '{new_field}' into new table: '{new_table_name}'")
-        new_schema = store_records_sql(records, SQL_DB_PATH, new_table_name, parent_field)
-
-        # Merge new fields back to main table
-        print(f"Merging new field '{new_field}' back to main table")
-        merge_new_fields_to_main_table(new_table_name, new_field, parent_field, SQL_DB_PATH)
-
-        # Update base_fields and schema for future queries
-        base_fields.append(new_field)
-        schema[new_field] = "TEXT"
+        # Load clauses to process
+        clauses_to_process = load_records(SQL_DB_PATH, TABLE_NAME)
         if parent_field:
-            schema['parent_field'] = "TEXT"
+            # Optimize by filtering clauses that have the parent field
+            clauses_to_process = [
+                r for r in clauses_to_process if r.get(parent_field) is not None
+            ]
+            print(f"Optimized processing: {len(clauses_to_process)} clauses with parent field '{parent_field}'")
 
-        # Generate and execute SQL against the main table
-        print(f"Generating SQL query for original query: '{query}' against main table with updated schema")
-        sql = generate_filter_sql(query, schema, TABLE_NAME)
-        execute_generated_sql(sql, SQL_DB_PATH)
+        # Step 3: Extract new field from clauses
+        print(f"\nStep 3: Extracting '{new_field}' from {len(clauses_to_process)} clauses...")
+        extracted_records = []
+        for record in tqdm(clauses_to_process):
+            extracted_data = extract_fields_from_clause(record["clause"], [new_field])
+            # Ensure the extracted data is a dictionary
+            if isinstance(extracted_data, dict):
+                record.update(extracted_data)
+            extracted_records.append(record)
+        
+        # Step 4: Merge new field into main table
+        print(f"\nStep 4: Merging new field '{new_field}' into main table...")
+        if extracted_records:
+            # Create a temporary table with the new data
+            temp_table_name = f"temp_{sanitize_field_name(new_field)}"
+            store_records_sql(extracted_records, SQL_DB_PATH, temp_table_name)
+            
+            # Merge the temporary table into the main table
+            merge_new_fields_to_main_table(
+                temp_table_name, new_field, parent_field, SQL_DB_PATH, TABLE_NAME
+            )
+            
+            # Update schema for SQL generation
+            recs = load_records(SQL_DB_PATH, TABLE_NAME)
+            schema = infer_schema_from_records(recs)
+        
+    # Step 5: Generate and execute SQL
+    print("\nStep 5: Generating and executing SQL query…")
+    where_clause = generate_filter_sql(query, schema, TABLE_NAME)
+    
+    # Construct the full query
+    sql_query = f"SELECT * FROM {TABLE_NAME}"
+    if where_clause and where_clause.strip() and where_clause != "1=0":
+        sql_query += f" WHERE {where_clause}"
+    
+    print(f"\nExecuting SQL: {sql_query}")
+    execute_generated_sql(sql_query, SQL_DB_PATH)
 
 def run_tests():
     """
@@ -728,6 +730,6 @@ if __name__ == "__main__":
     run_tests()
 
     # Example usage
-    user_query = "I want all the clauses that has black company more than 0.5"
+    user_query = "Show me all clauses with black company percentage greater than 0.5"
     print("\nHandling query:", user_query)
     handle_query(user_query, base_fields, schema)
